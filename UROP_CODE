@@ -1,0 +1,124 @@
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+
+#데이터 가공 단계
+dataset = ["kakao.csv", "samsung.csv", "netmarble.csv"]
+dataset_proc = []
+
+#주식의 날짜와 시가 데이터만을 사용함, 2017년 6월 1일~2022년 6월 1일의 데이터를 사용함
+def setData(filename):
+  data = pd.read_csv(filename)
+  data = data[['Date', 'Open']]
+  return data
+
+for data in dataset:
+  data = setData(data)
+  dataset_proc.append(data)
+
+#확인
+print(dataset_proc)
+
+#모델 구현 단계
+#70%와 15%로 학습, 15%로 검증, 결과층 자체를 벡터로
+
+class BasicGRU(nn.Module):
+  def __init__(self, n_layers, hidden_dim, n_dim, out_dim, dropout_p):
+    super(BasicGRU, self).__init__()
+    self.n_layers = n_layers #은닉층 갯수
+    self.hidden_dim = hidden_dim #은닉층 차원
+    self.n_dim = n_dim #입력 차원
+    self.out_dim = out_dim #출력 차원, 결과벡터
+    self.dropout = dropout_p #드롭아웃 확률
+    self.gru = nn.GRU(self.n_dim, self.hidden_dim, num_layers = self.n_layers)
+    self.out = nn.Linear(self.hidden_dim, self.out_dim)
+  
+  def init_state(self):
+    weight = next(self.parameters()).data
+    return weight.new(self.n_layers, self.hidden_dim).zero_()
+  
+  def forward(self, x):
+    h_0 = self.init_state()
+    x, _ = self.gru(x, h_0)
+    h_t = x[:, :]
+    out = self.out(h_t)
+    return out
+
+def train(model, optimizer, x, y):
+  x = x.transpose(0, 1) #모양맞추기
+  y = y.transpose(0, 1) #모양맞추기
+  model.train()
+  optimizer.zero_grad()
+  out = model(x)
+  loss = F.cross_entropy(out, y)
+  loss.backward()
+  optimizer.step()
+  return loss.item(), out #확인용
+
+def evaluate(model, x, y):
+  x = x.transpose(0, 1) #모양맞추기
+  y = y.transpose(0, 1) #모양맞추기
+  model.eval()
+  out = model(x)
+  loss = F.cross_entropy(out, y)
+  return loss.item(), out #확인용
+  
+  #실행
+#RNN 되는지 확인
+
+#파라미터
+lr = 0.01
+EPOCHS = 21
+DROPOUT_P = 0.5
+
+#첫번째 데이터셋의 시가만 사용(이 부분만 변경하면 n번째 데이터셋 사용 가능)
+dataset = dataset_proc[1]
+dataset = dataset[['Open']]
+
+#0, 1사이로 정규화
+def norm(dataset):
+  return dataset.apply(lambda x: (x-x.min())/(x.max()-x.min()))
+dataset = norm(dataset)
+dataset=torch.FloatTensor(dataset.values.tolist())
+
+
+#학습데이터
+dataset_train = dataset[:int(len(dataset)*0.7)]
+dataset_train_test = dataset[int(len(dataset)*0.7):int(len(dataset)*0.85)]
+
+#테스트데이터
+dataset_test = dataset[int(len(dataset)*0.15):int(len(dataset)*0.85)]
+dataset_test = dataset_test[1:]
+dataset_test_test = dataset[int(len(dataset)*0.85):]
+
+#그래프로 데이터확인
+plt.plot(list(range(len(dataset))), dataset)
+plt.show()
+
+#훈련
+model = BasicGRU(2, 256, len(dataset_train), len(dataset_train_test), DROPOUT_P)
+optimizer = torch.optim.Adam(model.parameters(), lr = lr)
+for i in range(EPOCHS):
+  loss, out = train(model, optimizer, dataset_train, dataset_train_test)
+  print("EPOCHS: ", i, "Loss: ", loss)
+  if(i%10 == 0):
+    out = out.detach().numpy()
+    out = out.transpose(1, 0)
+    plt.plot(list(range(len(dataset_train_test))), dataset_train_test, label = "origin")
+    plt.plot(list(range(len(out))), torch.FloatTensor(out), label = "pred")
+    plt.legend()
+    plt.show()
+    if(i == EPOCHS-1): #검증 시의 그래프를 비교하기 위함이다.
+      plt.plot(list(range(len(out))), torch.FloatTensor(out), label = "pred_final")
+
+#검증
+loss, out = evaluate(model, dataset_test, dataset_test_test)
+print("Loss: ", loss)
+out = out.detach().numpy()
+out = out.transpose(1, 0)
+plt.plot(list(range(len(dataset_test_test))), dataset_test_test, label = "real")
+plt.plot(list(range(len(out))), torch.FloatTensor(out), label = "pred for real")
+plt.legend()
+plt.show()
